@@ -47,6 +47,11 @@
      module procedure cvmix_put_shear_str
    end interface cvmix_put_shear
 
+   interface cvmix_coeffs_shear
+     module procedure cvmix_coeffs_shear_wrap
+     module procedure cvmix_coeffs_shear_low
+   end interface cvmix_coeffs_shear
+
 ! !PUBLIC TYPES:
 
   ! cvmix_shear_params_type contains the necessary parameters for shear mixing
@@ -155,11 +160,11 @@
 
 !BOP
 
-! !IROUTINE: cvmix_coeffs_shear
+! !IROUTINE: cvmix_coeffs_shear_wrap
 ! !INTERFACE:
 
-  subroutine cvmix_coeffs_shear(CVmix_vars, CVmix_shear_params,    &
-                                CVmix_bkgnd_params, colid, no_diff)
+  subroutine cvmix_coeffs_shear_wrap(CVmix_vars, CVmix_shear_params,    &
+                                    CVmix_bkgnd_params, colid, no_diff)
 
 ! !DESCRIPTION:
 !  Computes vertical tracer and velocity mixing coefficients for
@@ -184,15 +189,60 @@
 !EOP
 !BOC
 
+    call cvmix_coeffs_shear_low(CVmix_vars%visc_iface(:),   &
+                                CVmix_vars%diff_iface(:,1), &
+                                CVmix_vars%nlev,            &
+                                CVmix_vars%Ri_iface,        &
+                                CVmix_shear_params,         &
+                                CVmix_bkgnd_params,         &
+                                colid, no_diff)
+!EOC
+
+  end subroutine cvmix_coeffs_shear_wrap
+
+!BOP
+
+! !IROUTINE: cvmix_coeffs_shear_low
+! !INTERFACE:
+
+  subroutine cvmix_coeffs_shear_low(visc_iface, diff_iface, &
+                                    nLevs, Ri_iface,        &
+                                    CVmix_shear_params,     &
+                                    CVmix_bkgnd_params,     &
+                                    colid, no_diff)
+
+! !DESCRIPTION:
+!  Computes vertical tracer and velocity mixing coefficients for
+!  shear-type mixing parameterizatiions. Note that Richardson number
+!  is needed at both T-points and U-points.
+!\\
+!\\
+!
+! !USES:
+!  only those used by entire module.
+
+! !INPUT PARAMETERS:
+    integer,                                 intent(in) :: nLevs
+    real(cvmix_r8), dimension(:),            intent(in) :: Ri_iface
+    type(cvmix_shear_params_type),           intent(in) :: CVmix_shear_params
+    ! PP mixing requires CVmix_bkgnd_params
+    type(cvmix_bkgnd_params_type), optional, intent(in) :: CVmix_bkgnd_params
+    ! colid is only needed if CVmix_bkgnd_params%lvary_horizontal is true
+    integer,                       optional, intent(in) :: colid
+    logical,                       optional, intent(in) :: no_diff
+
+! !INPUT/OUTPUT PARAMETERS:
+    real(cvmix_r8), dimension(:), intent(inout) :: visc_iface, diff_iface
+!EOP
+!BOC
+
     integer                   :: kw ! vertical cell index
     logical                   :: calc_diff
     real(cvmix_r8)            :: nu
     real(cvmix_r8)            :: nu_zero, PP_alpha, KPP_Ri_zero, loc_exp
     real(cvmix_r8)            :: bkgnd_diff, bkgnd_visc
-    real(cvmix_r8), pointer, dimension(:) :: RICH
 
     ! Pointer to make the code more legible
-    RICH => CVmix_vars%Ri_iface
     if (.not.present(no_diff)) then
       calc_diff = .true.
     else
@@ -218,13 +268,13 @@
         loc_exp  = CVmix_shear_params%PP_exp
 
         ! Pacanowski-Philander
-        do kw=1,CVmix_vars%nlev+1
+        do kw=1,nLevs+1
           bkgnd_diff = cvmix_bkgnd_static_diff(CVmix_bkgnd_params, kw, colid)
           bkgnd_visc = cvmix_bkgnd_static_visc(CVmix_bkgnd_params, kw, colid)
-          nu = nu_zero/((one+PP_alpha*RICH(kw))**loc_exp)+bkgnd_visc
-          CVmix_vars%visc_iface(kw) = nu
+          nu = nu_zero/((one+PP_alpha*Ri_iface(kw))**loc_exp)+bkgnd_visc
+          visc_iface(kw) = nu
           if (calc_diff) &
-            CVmix_vars%diff_iface(kw,1) = nu/(one+PP_alpha*RICH(kw)) + bkgnd_diff
+            diff_iface(kw) = nu/(one+PP_alpha*Ri_iface(kw)) + bkgnd_diff
         end do
 
       case ('KPP')
@@ -234,18 +284,18 @@
         loc_exp     = CVmix_shear_params%KPP_exp
 
         ! Large, et al
-        do kw=1,CVmix_vars%nlev+1
-            if (RICH(kw).lt.0) then
-              CVmix_vars%diff_iface(kw,1) = nu_zero
-            else if (RICH(kw).lt.KPP_Ri_zero) then
-              CVmix_vars%diff_iface(kw,1) = nu_zero * (one -                  &
-                   (RICH(kw)/KPP_Ri_zero)**2)**loc_exp
+        do kw=1,nLevs+1
+            if (Ri_iface(kw).lt.0) then
+              diff_iface(kw) = nu_zero
+            else if (Ri_iface(kw).lt.KPP_Ri_zero) then
+              diff_iface(kw) = nu_zero * (one -                  &
+                   (Ri_iface(kw)/KPP_Ri_zero)**2)**loc_exp
             else ! Ri_g >= Ri_zero
-              CVmix_vars%diff_iface(kw,1) = 0
+              diff_iface(kw) = 0
             end if
         end do
         ! to do: include global params for prandtl number!
-        CVmix_vars%visc_iface = CVmix_vars%diff_iface(:,1)
+        visc_iface(:) = diff_iface(:)
 
       case DEFAULT
         ! Note: this error should be caught in cvmix_init_shear
@@ -256,7 +306,7 @@
 
 !EOC
 
-  end subroutine cvmix_coeffs_shear
+  end subroutine cvmix_coeffs_shear_low
 
 !BOP
 
